@@ -60,6 +60,18 @@ final class TrainingStatisticsTests: XCTestCase {
         XCTAssertTrue(result.isEmpty)
     }
 
+    func test_volumeByMuscleGroup_usesStableOrderForEqualVolumes() throws {
+        makeCompletedEntry(muscleGroup: .legs, sets: [(100, 10)], daysAgo: 1)
+        makeCompletedEntry(muscleGroup: .chest, sets: [(100, 10)], daysAgo: 1)
+        let entries = allEntries()
+
+        let result = TrainingStatistics.volumeByMuscleGroup(entries: entries, since: nil)
+        let reversedResult = TrainingStatistics.volumeByMuscleGroup(entries: entries.reversed(), since: nil)
+
+        XCTAssertEqual(result.map(\.group), [.chest, .legs])
+        XCTAssertEqual(reversedResult.map(\.group), result.map(\.group))
+    }
+
     // MARK: - Helpers
 
     private func allEntries() -> [WorkoutEntry] {

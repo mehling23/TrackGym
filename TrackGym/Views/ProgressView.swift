@@ -4,6 +4,7 @@ import Charts
 
 struct ProgressTabView: View {
     @Query(sort: \Exercise.name) private var exercises: [Exercise]
+    @Query(sort: \Workout.date) private var workouts: [Workout]
     @State private var selectedExercise: Exercise?
 
     private var exercisesWithData: [Exercise] {
@@ -15,7 +16,7 @@ struct ProgressTabView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if exercisesWithData.isEmpty {
+                if workouts.isEmpty {
                     ContentUnavailableView {
                         Label("Keine Daten vorhanden", systemImage: "chart.line.uptrend.xyaxis")
                     } description: {
@@ -30,7 +31,7 @@ struct ProgressTabView: View {
                     if let exercise = selectedExercise {
                         ExerciseProgressView(exercise: exercise)
                     } else {
-                        OverallProgressView(exercises: exercisesWithData)
+                        OverallProgressView(exercises: exercisesWithData, workouts: workouts)
                     }
                 }
             }
@@ -46,7 +47,7 @@ struct ProgressTabView: View {
                     NavigationLink {
                         SettingsView()
                     } label: {
-                        Image(systemName: "gearshape")
+                        Label("Einstellungen", systemImage: "gearshape")
                     }
                 }
             }
@@ -75,6 +76,7 @@ private struct ExerciseSelectionPicker: View {
                         .foregroundStyle(selection == nil ? .white : .primary)
                         .clipShape(Capsule())
                 }
+                .accessibilityAddTraits(selection == nil ? .isSelected : [])
 
                 ForEach(exercises) { exercise in
                     Button {
@@ -88,6 +90,7 @@ private struct ExerciseSelectionPicker: View {
                             .foregroundStyle(selection?.persistentModelID == exercise.persistentModelID ? .white : .primary)
                             .clipShape(Capsule())
                     }
+                    .accessibilityAddTraits(selection?.persistentModelID == exercise.persistentModelID ? .isSelected : [])
                 }
             }
             .padding(.horizontal)
@@ -102,18 +105,10 @@ private struct ExerciseSelectionPicker: View {
 private struct OverallProgressView: View {
     @AppStorage("weightUnit") private var weightUnit: String = WeightUnit.kg.rawValue
     let exercises: [Exercise]
+    let workouts: [Workout]
 
     private var selectedUnit: WeightUnit {
         WeightUnit.resolved(from: weightUnit)
-    }
-
-    private var workouts: [Workout] {
-        let entries = exercises.flatMap(\.completedWorkoutEntries)
-        let keyed: [PersistentIdentifier: Workout] = entries.reduce(into: [:]) { result, entry in
-            guard let workout = entry.workout else { return }
-            result[workout.persistentModelID] = workout
-        }
-        return keyed.values.sorted { $0.date < $1.date }
     }
 
     private var volumeByWorkout: [(id: PersistentIdentifier, date: Date, volume: Double)] {
@@ -141,7 +136,7 @@ private struct OverallProgressView: View {
     @State private var volumePeriod: VolumePeriod = .week
 
     private var muscleVolumeData: [(group: MuscleGroup, volume: Double)] {
-        let entries = exercises.flatMap(\.workoutEntries)
+        let entries = workouts.flatMap(\.entries)
         return TrainingStatistics.volumeByMuscleGroup(entries: entries, since: volumePeriod.since)
             .map { (group: $0.group, volume: selectedUnit.displayValue(fromKilograms: $0.volumeKg)) }
     }
@@ -156,7 +151,7 @@ private struct OverallProgressView: View {
                                 x: .value("Datum", point.date),
                                 y: .value("Volumen (\(selectedUnit.rawValue))", point.volume)
                             )
-                            .interpolationMethod(.catmullRom)
+                            .interpolationMethod(.monotone)
                             .foregroundStyle(.blue)
 
                             PointMark(
@@ -276,7 +271,7 @@ private struct ExerciseProgressView: View {
                                 x: .value("Datum", entry.date),
                                 y: .value("Gewicht (\(selectedUnit.rawValue))", selectedUnit.displayValue(fromKilograms: entry.maxWeight))
                             )
-                            .interpolationMethod(.catmullRom)
+                            .interpolationMethod(.monotone)
                             .foregroundStyle(.blue)
 
                             PointMark(

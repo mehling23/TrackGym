@@ -12,7 +12,7 @@ struct ExercisePickerView: View {
     let onSelect: ([Exercise]) -> Void
 
     private var filteredExercises: [Exercise] {
-        let trimmedSearch = searchText.trimmingCharacters(in: .whitespaces)
+        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let muscle = selectedMuscleGroup
         let equipment = selectedEquipmentType
         return exercises.filter { exercise in
@@ -73,6 +73,23 @@ struct ExercisePickerView: View {
                 ForEach(sortedMuscleGroups) { muscleGroup in
                     muscleSection(for: muscleGroup)
                 }
+
+                if filteredExercises.isEmpty {
+                    Section {
+                        ContentUnavailableView(
+                            "Keine Übungen gefunden",
+                            systemImage: "magnifyingglass",
+                            description: Text("Passe den Suchbegriff oder die Filter an.")
+                        )
+                        if !searchText.isEmpty || selectedMuscleGroup != nil || selectedEquipmentType != nil {
+                            Button("Filter zurücksetzen") {
+                                searchText = ""
+                                selectedMuscleGroup = nil
+                                selectedEquipmentType = nil
+                            }
+                        }
+                    }
+                }
             }
             .navigationTitle("Übungen wählen")
             .navigationBarTitleDisplayMode(.inline)
@@ -89,11 +106,6 @@ struct ExercisePickerView: View {
                         dismiss()
                     }
                     .disabled(selectedExercises.isEmpty)
-                }
-            }
-            .overlay {
-                if filteredExercises.isEmpty && !searchText.isEmpty {
-                    ContentUnavailableView.search(text: searchText)
                 }
             }
         }
@@ -143,6 +155,7 @@ struct ExercisePickerView: View {
                         }
                     }
                 }
+                .accessibilityAddTraits(isSelected(exercise) ? .isSelected : [])
             }
         } header: {
             Label(muscleGroup.displayName, systemImage: muscleGroup.icon)
@@ -164,6 +177,10 @@ private struct FilterChip: View {
                 .background(isSelected ? Color.blue : Color(.systemGray5))
                 .foregroundStyle(isSelected ? .white : .primary)
                 .clipShape(Capsule())
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.borderless)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

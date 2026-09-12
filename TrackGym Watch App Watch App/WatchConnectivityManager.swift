@@ -2,6 +2,7 @@ import WatchConnectivity
 import Foundation
 import Observation
 import WatchKit
+import CoreFoundation
 
 struct WatchSet: Identifiable, Hashable {
     let setNumber: Int
@@ -26,6 +27,7 @@ enum SetDeliveryOutcome {
 final class WatchConnectivityManager: NSObject, WCSessionDelegate {
     static let shared = WatchConnectivityManager()
     private static let clearedContextStampKey = "clearedContextStamp"
+    private let defaults: UserDefaults
 
     /// Stored application context older than this is not replayed on launch.
     /// If the phone app died mid-workout it never sent `workoutEnded`, and
@@ -39,6 +41,7 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
     var sets: [WatchSet] = []
     var workoutActive: Bool = false
     var isReachable: Bool = false
+    var hasActivated: Bool = false
 
     /// Endzeitpunkt der laufenden Satzpause; nil wenn kein Timer aktiv.
     var restEndDate: Date?
@@ -51,6 +54,11 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
     /// user dismissed on the watch.
     private var lastContextStamp: Double = 0
 
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        super.init()
+    }
+
     func activate() {
         WCSession.default.delegate = self
         WCSession.default.activate()
@@ -62,6 +70,7 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
             "weight": weight,
             "reps": reps,
             "exerciseName": exerciseName,
+            "unit": unit,
             "id": UUID().uuidString,
             "sentAt": Date().timeIntervalSince1970
         ]
@@ -107,8 +116,19 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
     /// without relying on `Task.sleep` to bridge the async hop.
     @MainActor
     func applyStateSynchronously(_ message: [String: Any]) {
-        guard let type = message["type"] as? String else { return }
-        lastContextStamp = message["sentAt"] as? Double ?? 0
+        guard let type = message["type"] as? String,
+              type == "activeExercise" || type == "workoutEnded" else { return }
+        if message["sentAt"] != nil {
+            guard let stamp = Self.doubleValue(message["sentAt"]),
+                  stamp.isFinite, stamp > 0,
+                  stamp > lastContextStamp else { return }
+            // Immediate messages and application contexts can arrive in either
+            // order. Neither an older state nor a dismissed duplicate may
+            // reactivate a workout that has already ended on the watch.
+            if type == "activeExercise",
+               stamp <= defaults.double(forKey: Self.clearedContextStampKey) { return }
+            lastContextStamp = stamp
+        }
         switch type {
         case "activeExercise":
             self.exerciseName = message["exerciseName"] as? String ?? ""
@@ -118,15 +138,19 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
             // Tolerant number parsing: values boxed as Swift Int or Double do
             // not cross-cast through Any, and payloads produced in-process
             // (tests) or via plist decoding may carry either representation.
+            var seenSetNumbers = Set<Int>()
             self.sets = raw.compactMap { dict in
                 guard let n = Self.intValue(dict["setNumber"]),
                       let w = Self.doubleValue(dict["weight"]),
-                      let r = Self.intValue(dict["reps"]) else { return nil }
+                      let r = Self.intValue(dict["reps"]),
+                      n > 0, w.isFinite, w >= 0, r >= 0,
+                      seenSetNumbers.insert(n).inserted else { return nil }
                 return WatchSet(setNumber: n, weight: w, reps: r)
             }
             self.workoutActive = true
-            if let ends = message["restEndsAt"] as? Double,
-               ends > Date().timeIntervalSince1970 {
+            let now = Date().timeIntervalSince1970
+            if let ends = Self.doubleValue(message["restEndsAt"]),
+               ends.isFinite, ends > now, ends - now <= Self.maxReplayAge {
                 self.restEndDate = Date(timeIntervalSince1970: ends)
             } else {
                 self.restEndDate = nil
@@ -135,6 +159,8 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
         case "workoutEnded":
             self.workoutActive = false
             self.exerciseName = ""
+            self.muscleGroup = ""
+            self.unit = "kg"
             self.sets = []
             self.restEndDate = nil
             restHapticTask?.cancel()
@@ -165,7 +191,7 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
     func clearLocalState() {
         // Remember which pushed state was dismissed so the activation replay
         // below does not immediately resurrect it on the next app launch.
-        UserDefaults.standard.set(lastContextStamp, forKey: Self.clearedContextStampKey)
+        defaults.set(lastContextStamp, forKey: Self.clearedContextStampKey)
         workoutActive = false
         exerciseName = ""
         muscleGroup = ""
@@ -176,6 +202,7 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
+        guard activationState == .activated else { return }
         // didReceiveApplicationContext only fires for content that has not
         // been delivered yet; a context received before the watch app was
         // terminated is never replayed by the system. Restore it manually so
@@ -184,9 +211,14 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
         let reachable = session.isReachable
         Task { @MainActor in
             self.isReachable = reachable
-            let clearedStamp = UserDefaults.standard.double(forKey: Self.clearedContextStampKey)
-            guard Self.shouldReplay(context: stored, clearedStamp: clearedStamp, now: Date()) else { return }
-            self.applyStateSynchronously(stored)
+            let clearedStamp = self.defaults.double(forKey: Self.clearedContextStampKey)
+            if Self.shouldReplay(context: stored, clearedStamp: clearedStamp, now: Date()) {
+                self.applyStateSynchronously(stored)
+            }
+            // Recover only after the phone state is known. At launch the
+            // default workoutActive=false does not mean the workout ended.
+            WorkoutSessionController.shared.recoverIfNeeded { self.workoutActive }
+            self.hasActivated = true
         }
     }
 
@@ -195,10 +227,11 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
     /// `clearLocalState`, and anything older than `maxReplayAge`.
     nonisolated static func shouldReplay(context: [String: Any], clearedStamp: Double, now: Date) -> Bool {
         guard !context.isEmpty else { return false }
-        let stamp = context["sentAt"] as? Double ?? 0
-        guard stamp != 0 else { return true }
-        if stamp == clearedStamp { return false }
-        return now.timeIntervalSince1970 - stamp <= maxReplayAge
+        guard context["sentAt"] != nil else { return true }
+        guard let stamp = doubleValue(context["sentAt"]), stamp.isFinite, stamp > 0 else { return false }
+        if stamp <= clearedStamp { return false }
+        let age = now.timeIntervalSince1970 - stamp
+        return age >= -120 && age <= maxReplayAge
     }
 
     nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
@@ -209,14 +242,13 @@ final class WatchConnectivityManager: NSObject, WCSessionDelegate {
     }
 
     nonisolated private static func intValue(_ value: Any?) -> Int? {
-        if let i = value as? Int { return i }
-        if let d = value as? Double, d.isFinite { return Int(d) }
-        return nil
+        guard let number = doubleValue(value) else { return nil }
+        return Int(exactly: number)
     }
 
     nonisolated private static func doubleValue(_ value: Any?) -> Double? {
-        if let d = value as? Double { return d }
-        if let i = value as? Int { return Double(i) }
-        return nil
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        return number.doubleValue
     }
 }

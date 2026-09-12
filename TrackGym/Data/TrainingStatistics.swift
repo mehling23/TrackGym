@@ -16,6 +16,9 @@ enum TrainingStatistics {
         }
         return totals
             .map { (group: $0.key, volumeKg: $0.value) }
-            .sorted { $0.volumeKg > $1.volumeKg }
+            .sorted {
+                if $0.volumeKg != $1.volumeKg { return $0.volumeKg > $1.volumeKg }
+                return $0.group.rawValue < $1.group.rawValue
+            }
     }
 }

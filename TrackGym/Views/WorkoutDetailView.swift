@@ -47,6 +47,11 @@ struct WorkoutDetailView: View {
                         planToEdit = plan
                     }
                     .buttonStyle(.borderedProminent)
+                    if !planWorkouts.isEmpty {
+                        Button("Trainingshistorie anzeigen") {
+                            showingHistory = true
+                        }
+                    }
                 }
             } else {
                 List {

@@ -61,6 +61,29 @@ final class TrackGymTests: XCTestCase {
         XCTAssertEqual(entry.sortedSets.map(\.setNumber), [1, 2, 3])
     }
 
+    func test_hasValidSets_acceptsCompletedWeightedAndBodyweightSets() {
+        let entry = makeEntry(weights: [(1, 0, 12), (2, 80, 8)])
+        XCTAssertTrue(entry.hasValidSets)
+    }
+
+    func test_hasValidSets_rejectsEmptyAndUnfinishedEntries() {
+        XCTAssertFalse(makeEntry(weights: []).hasValidSets)
+        XCTAssertFalse(makeEntry(weights: [(1, 50, 0)]).hasValidSets)
+    }
+
+    func test_hasValidSets_rejectsNegativeAndNonfiniteValues() {
+        for weight in [-1.0, Double.nan, .infinity, -.infinity] {
+            XCTAssertFalse(makeEntry(weights: [(1, weight, 10)]).hasValidSets)
+        }
+        XCTAssertFalse(makeEntry(weights: [(1, 50, -1)]).hasValidSets)
+    }
+
+    func test_hasValidSets_rejectsOverflowingSetAndEntryVolume() {
+        XCTAssertFalse(makeEntry(weights: [(1, .greatestFiniteMagnitude, 2)]).hasValidSets)
+        let largeWeight = Double.greatestFiniteMagnitude * 0.75
+        XCTAssertFalse(makeEntry(weights: [(1, largeWeight, 1), (2, largeWeight, 1)]).hasValidSets)
+    }
+
     // MARK: - DefaultExercises seeding
 
     func test_seed_insertsAllExercisesOnFirstRun() throws {
@@ -267,6 +290,106 @@ final class TrackGymTests: XCTestCase {
 
         let names = try context.fetch(FetchDescriptor<Exercise>()).map(\.name)
         XCTAssertEqual(names, ["Existing"])
+    }
+
+    func test_import_replacesOrphanedEntriesAndDetachedSets() throws {
+        let exercise = Exercise(name: "Existing", muscleGroup: .chest, equipmentType: .freeWeight)
+        context.insert(exercise)
+        let orphan = WorkoutEntry(date: .now, exercise: exercise)
+        context.insert(orphan)
+        let orphanSet = WorkoutSet(setNumber: 1, weight: 50, reps: 10, workoutEntry: orphan)
+        context.insert(orphanSet)
+        let detachedSet = WorkoutSet(setNumber: 1, weight: 20, reps: 10)
+        context.insert(detachedSet)
+        try context.save()
+
+        let data = try encodedBackup(ExportData(exercises: [], workoutPlans: [], workouts: []))
+        try DataExporter.importData(from: data, context: context)
+
+        XCTAssertTrue(try context.fetch(FetchDescriptor<Exercise>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<WorkoutEntry>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<WorkoutSet>()).isEmpty)
+    }
+
+    func test_import_rejectsDuplicatePlanIDsBeforeReplacingExistingData() throws {
+        let existing = Exercise(name: "Existing", muscleGroup: .chest, equipmentType: .freeWeight)
+        context.insert(existing)
+        try context.save()
+        let payload = ExportData(exercises: [], workoutPlans: [
+            ExportWorkoutPlan(id: "same-id", name: "Push", exerciseNames: []),
+            ExportWorkoutPlan(id: "same-id", name: "Pull", exerciseNames: []),
+        ], workouts: [])
+
+        XCTAssertThrowsError(try DataExporter.importData(from: encodedBackup(payload), context: context)) { error in
+            guard case DataExporterError.duplicatePlanIDs(let ids) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertEqual(ids, ["same-id"])
+        }
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Exercise>()).map(\.name), ["Existing"])
+    }
+
+    func test_import_rejectsInvalidWorkoutValuesBeforeReplacingExistingData() throws {
+        let existing = Exercise(name: "Existing", muscleGroup: .chest, equipmentType: .freeWeight)
+        context.insert(existing)
+        try context.save()
+        let invalidSets = [
+            ExportWorkoutSet(setNumber: 0, weight: 50, reps: 10),
+            ExportWorkoutSet(setNumber: 1, weight: -50, reps: 10),
+            ExportWorkoutSet(setNumber: 1, weight: 50, reps: -1),
+            ExportWorkoutSet(setNumber: 1, weight: .greatestFiniteMagnitude, reps: 2),
+        ]
+        for invalidSet in invalidSets {
+            let payload = ExportData(exercises: [], workoutPlans: [], workouts: [
+                ExportWorkout(name: "Invalid", date: .now, duration: 60, entries: [
+                    ExportWorkoutEntry(date: .now, sets: [invalidSet]),
+                ]),
+            ])
+            XCTAssertThrowsError(try DataExporter.importData(from: encodedBackup(payload), context: context)) { error in
+                guard case DataExporterError.invalidWorkoutData = error else {
+                    return XCTFail("Unexpected error: \(error)")
+                }
+            }
+            XCTAssertEqual(try context.fetch(FetchDescriptor<Exercise>()).map(\.name), ["Existing"])
+        }
+    }
+
+    func test_import_rejectsNegativeDuration() throws {
+        let payload = ExportData(exercises: [], workoutPlans: [], workouts: [
+            ExportWorkout(name: "Invalid", date: .now, duration: -1, entries: []),
+        ])
+        XCTAssertThrowsError(try DataExporter.importData(from: encodedBackup(payload), context: context)) { error in
+            guard case DataExporterError.invalidWorkoutData = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func test_import_preservesLegacyZeroRepSets() throws {
+        let payload = ExportData(exercises: [], workoutPlans: [], workouts: [
+            ExportWorkout(name: "Legacy", date: .now, duration: 0, entries: [
+                ExportWorkoutEntry(date: .now, sets: [ExportWorkoutSet(setNumber: 1, weight: 0, reps: 0)]),
+            ]),
+        ])
+        try DataExporter.importData(from: encodedBackup(payload), context: context)
+        let sets = try context.fetch(FetchDescriptor<WorkoutSet>())
+        XCTAssertEqual(sets.count, 1)
+        XCTAssertEqual(sets.first?.reps, 0)
+    }
+
+    func test_import_planFallsBackToNamesForUnresolvedExerciseIDs() throws {
+        let benchID = UUID()
+        let payload = ExportData(exercises: [
+            ExportExercise(id: benchID.uuidString, name: "Bench", muscleGroup: "chest", equipmentType: "freeWeight", isCustom: false),
+            ExportExercise(name: "Row", muscleGroup: "back", equipmentType: "cable", isCustom: false),
+            ExportExercise(name: "Squat", muscleGroup: "legs", equipmentType: "freeWeight", isCustom: false),
+        ], workoutPlans: [
+            ExportWorkoutPlan(name: "Mixed", exerciseIDs: [benchID.uuidString, UUID().uuidString, "legacy-id"], exerciseNames: ["Old Bench", "Row", "Squat"]),
+        ], workouts: [])
+
+        try DataExporter.importData(from: encodedBackup(payload), context: context)
+        let plan = try XCTUnwrap(try context.fetch(FetchDescriptor<WorkoutPlan>()).first)
+        XCTAssertEqual(plan.orderedExercises.map(\.name), ["Bench", "Row", "Squat"])
     }
 
     func test_import_rejectsDuplicateExerciseNames_caseInsensitive() throws {
@@ -647,6 +770,12 @@ final class TrackGymTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private func encodedBackup(_ payload: ExportData) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(payload)
+    }
 
     private func makeEntry(weights: [(setNumber: Int, weight: Double, reps: Int)]) -> WorkoutEntry {
         let exercise = Exercise(name: "Test", muscleGroup: .chest, equipmentType: .freeWeight)

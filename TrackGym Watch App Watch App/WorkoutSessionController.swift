@@ -3,6 +3,29 @@ import HealthKit
 import Observation
 import OSLog
 
+/// Identifies authorization attempts so ending a workout also invalidates
+/// callbacks that arrive after the permission sheet was dismissed.
+nonisolated struct WorkoutAuthorizationGate {
+    private var pendingID: UUID?
+
+    mutating func begin() -> UUID? {
+        guard pendingID == nil else { return nil }
+        let id = UUID()
+        pendingID = id
+        return id
+    }
+
+    mutating func complete(_ id: UUID) -> Bool {
+        guard pendingID == id else { return false }
+        pendingID = nil
+        return true
+    }
+
+    mutating func cancel() {
+        pendingID = nil
+    }
+}
+
 /// Besitzt die HealthKit-Workout-Session der Watch. Verweigerte Berechtigung
 /// oder Session-Fehler blockieren nichts: das Workout-Tracking über
 /// WatchConnectivity läuft unverändert, es fehlen nur Puls/Kalorien/Ringe.
@@ -20,6 +43,10 @@ final class WorkoutSessionController: NSObject {
     private let healthStore = HKHealthStore()
     private var session: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
+    private var authorization = WorkoutAuthorizationGate()
+    private var isRecovering = false
+    private var restartAfterEnding = false
+    private var saveToken: UUID?
 
     var heartRate: Double?
     var activeEnergy: Double?
@@ -30,7 +57,14 @@ final class WorkoutSessionController: NSObject {
 
     @MainActor
     func startIfNeeded() {
-        guard !isRunning, HKHealthStore.isHealthDataAvailable() else { return }
+        guard !isRunning, !isRecovering, HKHealthStore.isHealthDataAvailable() else { return }
+        // An ending session still owns its builder until HealthKit reports
+        // .ended. Do not overwrite it with the next workout in the meantime.
+        if session != nil {
+            restartAfterEnding = true
+            return
+        }
+        guard let requestID = authorization.begin() else { return }
         let share: Set<HKSampleType> = [HKObjectType.workoutType()]
         let read: Set<HKObjectType> = [
             HKQuantityType(.heartRate),
@@ -43,8 +77,8 @@ final class WorkoutSessionController: NSObject {
             // `granted` only says the sheet was handled, not that the user
             // said yes; a denied share right surfaces as an error on
             // startActivity/finishWorkout and is logged there.
-            guard granted, let self else { return }
             Task { @MainActor in
+                guard let self, self.authorization.complete(requestID), granted else { return }
                 self.beginSession()
             }
         }
@@ -57,18 +91,25 @@ final class WorkoutSessionController: NSObject {
     /// Workout laut Phone noch läuft; sonst wird die Session sofort beendet.
     @MainActor
     func recoverIfNeeded(keepRunning: @escaping @MainActor () -> Bool) {
-        guard HKHealthStore.isHealthDataAvailable() else { return }
+        guard session == nil, !isRecovering, HKHealthStore.isHealthDataAvailable() else { return }
+        isRecovering = true
         healthStore.recoverActiveWorkoutSession { [weak self] recovered, error in
             if let error {
                 Self.log.error("Workout session recovery failed: \(error.localizedDescription, privacy: .public)")
             }
-            guard let recovered else { return }
             Task { @MainActor in
-                guard let self, !self.isRunning else { return }
-                Self.log.notice("Adopted a workout session left over from a previous launch")
-                self.adopt(recovered)
-                if !keepRunning() {
-                    self.end()
+                guard let self else { return }
+                self.isRecovering = false
+                guard self.session == nil else { return }
+                if let recovered {
+                    Self.log.notice("Adopted a workout session left over from a previous launch")
+                    self.authorization.cancel()
+                    self.adopt(recovered)
+                    if !keepRunning() {
+                        self.end()
+                    }
+                } else if keepRunning() {
+                    self.startIfNeeded()
                 }
             }
         }
@@ -76,7 +117,7 @@ final class WorkoutSessionController: NSObject {
 
     @MainActor
     private func beginSession() {
-        guard !isRunning else { return }
+        guard !isRunning, session == nil else { return }
         let config = HKWorkoutConfiguration()
         config.activityType = .traditionalStrengthTraining
         config.locationType = .indoor
@@ -104,6 +145,9 @@ final class WorkoutSessionController: NSObject {
         builder.delegate = self
         self.session = session
         self.builder = builder
+        saveToken = nil
+        heartRate = nil
+        activeEnergy = nil
         lastSaveError = nil
         isRunning = true
     }
@@ -113,48 +157,63 @@ final class WorkoutSessionController: NSObject {
     /// meldet — mit dem Enddatum, das HealthKit dafür liefert.
     @MainActor
     func end() {
+        authorization.cancel()
+        restartAfterEnding = false
         guard isRunning, let session else { return }
         isRunning = false
         session.end()
     }
 
     @MainActor
-    private func finalize(endDate: Date) {
-        guard let builder else { return }
+    private func finalize(sessionID: ObjectIdentifier, endDate: Date) {
+        guard let session, ObjectIdentifier(session) == sessionID, let builder else { return }
+        let shouldRestart = restartAfterEnding
+        restartAfterEnding = false
+        isRunning = false
         self.builder = nil
         self.session = nil
         heartRate = nil
         activeEnergy = nil
+        let token = UUID()
+        saveToken = token
         builder.endCollection(withEnd: endDate) { [weak self] _, error in
             if let error {
                 Self.log.error("endCollection failed: \(error.localizedDescription, privacy: .public)")
-                Task { @MainActor in self?.lastSaveError = error.localizedDescription }
+                Task { @MainActor in
+                    guard let self, self.saveToken == token else { return }
+                    self.lastSaveError = error.localizedDescription
+                }
                 return
             }
             builder.finishWorkout { [weak self] _, error in
                 if let error {
                     Self.log.error("finishWorkout failed: \(error.localizedDescription, privacy: .public)")
                 }
-                Task { @MainActor in self?.lastSaveError = error?.localizedDescription }
+                Task { @MainActor in
+                    guard let self, self.saveToken == token else { return }
+                    self.lastSaveError = error?.localizedDescription
+                }
             }
         }
+        if shouldRestart { startIfNeeded() }
     }
 }
 
 extension WorkoutSessionController: HKWorkoutSessionDelegate {
     nonisolated func workoutSession(_ workoutSession: HKWorkoutSession, didChangeTo toState: HKWorkoutSessionState, from fromState: HKWorkoutSessionState, date: Date) {
         guard toState == .ended else { return }
+        let sessionID = ObjectIdentifier(workoutSession)
         Task { @MainActor in
-            self.finalize(endDate: date)
+            self.finalize(sessionID: sessionID, endDate: date)
         }
     }
 
     nonisolated func workoutSession(_ workoutSession: HKWorkoutSession, didFailWithError error: Error) {
         Self.log.error("Workout session failed: \(error.localizedDescription, privacy: .public)")
+        let sessionID = ObjectIdentifier(workoutSession)
         Task { @MainActor in
             // A failed session may never report .ended; finish what we have.
-            self.isRunning = false
-            self.finalize(endDate: Date())
+            self.finalize(sessionID: sessionID, endDate: Date())
         }
     }
 }
@@ -173,7 +232,9 @@ extension WorkoutSessionController: HKLiveWorkoutBuilderDelegate {
                 .doubleValue(for: .kilocalorie())
             : nil
         guard heartRate != nil || energy != nil else { return }
+        let builderID = ObjectIdentifier(workoutBuilder)
         Task { @MainActor in
+            guard let builder = self.builder, ObjectIdentifier(builder) == builderID else { return }
             if let heartRate { self.heartRate = heartRate }
             if let energy { self.activeEnergy = energy }
         }

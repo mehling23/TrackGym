@@ -207,6 +207,24 @@ final class WorkoutHistoryTests: XCTestCase {
         XCTAssertTrue(entry.sets.contains { $0.persistentModelID == added.persistentModelID })
     }
 
+    func test_appendSet_repairsImportedNumberingThatWouldOverflow() throws {
+        let exercise = makeExercise("Bench Press")
+        let entry = makeEntry(for: exercise, daysAgo: 0)
+        let first = WorkoutSet(setNumber: 3, weight: 60, reps: 10, workoutEntry: entry)
+        let last = WorkoutSet(setNumber: Int.max, weight: 70, reps: 8, workoutEntry: entry)
+        context.insert(first)
+        context.insert(last)
+        entry.sets = [last, first]
+        try context.save()
+
+        let added = WorkoutHistory.appendSet(weight: 80, reps: 6, to: entry, in: context)
+        try context.save()
+
+        XCTAssertEqual(added.setNumber, 3)
+        XCTAssertEqual(entry.sortedSets.map(\.setNumber), [1, 2, 3])
+        XCTAssertEqual(entry.sortedSets.map(\.weight), [60, 70, 80])
+    }
+
     // MARK: - Helpers
 
     private func makeExercise(_ name: String) -> Exercise {

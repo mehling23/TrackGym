@@ -20,6 +20,7 @@ struct ExerciseImageView: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityHidden(true)
     }
 
     private var validatedRemoteImageURL: URL? {

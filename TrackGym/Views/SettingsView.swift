@@ -112,9 +112,11 @@ struct SettingsView: View {
                             if selectedScheme == scheme {
                                 Image(systemName: "checkmark")
                                     .foregroundStyle(.blue)
+                                    .accessibilityHidden(true)
                             }
                         }
                     }
+                    .accessibilityAddTraits(selectedScheme == scheme ? .isSelected : [])
                 }
             }
 
@@ -130,9 +132,11 @@ struct SettingsView: View {
                             if selectedUnit == unit {
                                 Image(systemName: "checkmark")
                                     .foregroundStyle(.blue)
+                                    .accessibilityHidden(true)
                             }
                         }
                     }
+                    .accessibilityAddTraits(selectedUnit == unit ? .isSelected : [])
                 }
             }
 
@@ -157,6 +161,7 @@ struct SettingsView: View {
                 } label: {
                     Label("Daten exportieren", systemImage: "square.and.arrow.up")
                 }
+                .disabled(isImporting)
 
                 Button {
                     showingImporter = true
@@ -184,16 +189,18 @@ struct SettingsView: View {
                 } label: {
                     Label("Fortschritte löschen", systemImage: "chart.line.downtrend.xyaxis")
                 }
+                .disabled(isImporting)
 
                 Button(role: .destructive) {
                     showingDeleteAll = true
                 } label: {
                     Label("Alle Daten löschen", systemImage: "trash")
                 }
+                .disabled(isImporting)
             } header: {
                 Text("Daten")
             } footer: {
-                Text("\"Fortschritte löschen\" entfernt alle gespeicherten Trainings. Pläne und Übungen bleiben erhalten.\n\"Alle Daten löschen\" entfernt alles. Standard-Übungen werden beim nächsten Start wiederhergestellt.")
+                Text("\"Fortschritte löschen\" entfernt alle gespeicherten Trainings. Pläne und Übungen bleiben erhalten.\n\"Alle Daten löschen\" entfernt alles. Standard-Übungen werden anschließend wiederhergestellt.")
             }
         }
         .navigationTitle("Einstellungen")

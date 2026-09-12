@@ -71,7 +71,7 @@ enum WorkoutHistory {
         to entry: WorkoutEntry,
         in context: ModelContext
     ) -> WorkoutSet {
-        let nextNumber = (entry.sets.map(\.setNumber).max() ?? 0) + 1
+        let nextNumber = entry.prepareNextSetNumber()
         let newSet = WorkoutSet(setNumber: nextNumber, weight: weight, reps: reps, workoutEntry: entry)
         context.insert(newSet)
         entry.sets.append(newSet)

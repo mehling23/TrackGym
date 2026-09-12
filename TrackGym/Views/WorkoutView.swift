@@ -77,26 +77,30 @@ struct WorkoutView: View {
                     Section("Trainingspläne") {
                         ForEach(plans) { plan in
                             HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(plan.name)
-                                        .font(.headline)
-                                        .foregroundStyle(.primary)
-                                    if !plan.exercises.isEmpty {
-                                        Text(plan.orderedExercises.map(\.name).joined(separator: ", "))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                    } else {
-                                        Text("Keine Übungen")
-                                            .font(.caption)
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
+                                Button {
                                     selectedDetailPlan = plan
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(plan.name)
+                                            .font(.headline)
+                                            .foregroundStyle(.primary)
+                                        if !plan.exercises.isEmpty {
+                                            Text(plan.orderedExercises.map(\.name).joined(separator: ", "))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        } else {
+                                            Text("Keine Übungen")
+                                                .font(.caption)
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
                                 }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(plan.name)
+                                .accessibilityHint("Trainingsplan und Historie anzeigen")
 
                                 Text("\(plan.exercises.count)")
                                     .font(.caption)
@@ -108,6 +112,7 @@ struct WorkoutView: View {
                                     Image(systemName: "play.circle.fill")
                                         .font(.title2)
                                         .foregroundStyle(.blue)
+                                        .frame(minWidth: 44, minHeight: 44)
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("\(plan.name) starten")

@@ -52,7 +52,7 @@ jobs:
             -destination "id=$DEST" \
             -configuration Debug \
             -only-testing:TrackGymTests \
-            -only-testing:TrackGymUITests/TrackGymUITests/test_appLaunchesAndShowsRootView
+            -only-testing:TrackGymUITests
 
   watchos:
     name: watchOS Build & Test

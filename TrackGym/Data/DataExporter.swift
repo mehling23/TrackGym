@@ -68,6 +68,9 @@ enum DataExporterError: LocalizedError {
     /// Two or more exercises in the export share the same stable identity,
     /// which would make ID-based re-linking ambiguous.
     case duplicateExerciseIDs([String])
+    /// Plan IDs are file-scoped, but must still identify exactly one plan.
+    case duplicatePlanIDs([String])
+    case invalidWorkoutData(String)
 
     var errorDescription: String? {
         switch self {
@@ -77,6 +80,10 @@ enum DataExporterError: LocalizedError {
         case .duplicateExerciseIDs(let ids):
             let joined = ids.joined(separator: ", ")
             return "Import abgebrochen: doppelte Übungs-IDs erkannt (\(joined))."
+        case .duplicatePlanIDs(let ids):
+            return "Import abgebrochen: doppelte Trainingsplan-IDs erkannt (\(ids.joined(separator: ", ")))."
+        case .invalidWorkoutData(let detail):
+            return "Import abgebrochen: ungültige Trainingsdaten (\(detail))."
         }
     }
 }
@@ -155,9 +162,8 @@ enum DataExporter {
         decoder.dateDecodingStrategy = .iso8601
         let importData = try decoder.decode(ExportData.self, from: data)
 
-        // MHE-5: Reject imports that contain duplicate exercise names up-front.
-        // The import path resolves entries by name only, so silently merging
-        // duplicates would re-link history to the wrong Exercise on round-trip.
+        // Reject ambiguous names before replacing the store: legacy backups
+        // and missing-ID fallbacks still resolve exercises by name.
         let normalizedToOriginal = importData.exercises.reduce(into: [String: String]()) { mapping, exercise in
             let normalized = Exercise.normalizedName(exercise.name)
             mapping[normalized] = mapping[normalized] ?? exercise.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -185,11 +191,30 @@ enum DataExporter {
             throw DataExporterError.duplicateExerciseIDs(duplicateIDs)
         }
 
+        let duplicatePlanIDs = importData.workoutPlans.compactMap(\.id)
+            .reduce(into: [String: Int]()) { counts, id in counts[id, default: 0] += 1 }
+            .filter { $0.value > 1 }
+            .map(\.key)
+            .sorted()
+        if !duplicatePlanIDs.isEmpty {
+            throw DataExporterError.duplicatePlanIDs(duplicatePlanIDs)
+        }
+        try validateWorkouts(importData.workouts)
+
         do {
-            // MHE-7: Delete only the roots and let SwiftData's cascade rules
-            // (`Workout.entries` -> `WorkoutEntry.sets`) propagate. This removes
-            // the brittle fixed-order fetch/delete that could leave the store
-            // inconsistent on partial failure.
+            // Interrupted workouts can leave entries without a Workout, and
+            // older stores can contain detached sets. They have no root that
+            // could cascade-delete them when replacing the backup.
+            let detachedSets = try context.fetch(FetchDescriptor<WorkoutSet>(
+                predicate: #Predicate { $0.workoutEntry == nil }
+            ))
+            let detachedEntries = try context.fetch(FetchDescriptor<WorkoutEntry>(
+                predicate: #Predicate { $0.workout == nil }
+            ))
+            for set in detachedSets { context.delete(set) }
+            for entry in detachedEntries { context.delete(entry) }
+            // Delete remaining roots through the relationship cascade rules;
+            // a single save/rollback covers the entire replacement.
             try deleteAll(Workout.self, in: context)
             try deleteAll(WorkoutPlan.self, in: context)
             try deleteAll(Exercise.self, in: context)
@@ -231,8 +256,14 @@ enum DataExporter {
                 context.insert(plan)
                 // File order is the user's order; setExercises records it.
                 if let exerciseIDs = planData.exerciseIDs {
-                    plan.setExercises(exerciseIDs.compactMap {
-                        Self.normalizedUUIDString($0).flatMap { exerciseMapByID[$0] }
+                    plan.setExercises(exerciseIDs.enumerated().compactMap { index, id in
+                        if let exercise = Self.normalizedUUIDString(id).flatMap({ exerciseMapByID[$0] }) {
+                            return exercise
+                        }
+                        // Match workout-entry fallback behavior for legacy or
+                        // hand-edited files whose IDs no longer resolve.
+                        guard planData.exerciseNames.indices.contains(index) else { return nil }
+                        return exerciseMapByName[Exercise.normalizedName(planData.exerciseNames[index])]
                     })
                 } else {
                     plan.setExercises(planData.exerciseNames.compactMap {
@@ -294,6 +325,32 @@ enum DataExporter {
     private static func deleteAll<T: PersistentModel>(_ type: T.Type, in context: ModelContext) throws {
         let items = try context.fetch(FetchDescriptor<T>())
         for item in items { context.delete(item) }
+    }
+
+    private static func validateWorkouts(_ workouts: [ExportWorkout]) throws {
+        for workout in workouts {
+            guard workout.duration >= 0 else {
+                throw DataExporterError.invalidWorkoutData("negative Dauer in \(workout.name)")
+            }
+            var totalVolume = 0.0
+            for entry in workout.entries {
+                for set in entry.sets {
+                    let weightKg = set.resolvedWeightUnit.kilograms(from: set.weight)
+                    let volume = weightKg * Double(set.reps)
+                    // Older app versions saved placeholder sets with zero
+                    // reps. Keep those backups readable, but reject values
+                    // that would corrupt totals or chart scales.
+                    guard set.setNumber > 0, set.weight.isFinite, set.weight >= 0,
+                          set.reps >= 0, weightKg.isFinite, volume.isFinite else {
+                        throw DataExporterError.invalidWorkoutData("ungültiger Satz in \(workout.name)")
+                    }
+                    totalVolume += volume
+                    guard totalVolume.isFinite else {
+                        throw DataExporterError.invalidWorkoutData("zu großes Volumen in \(workout.name)")
+                    }
+                }
+            }
+        }
     }
 
     /// Canonical (uppercase) UUID string, or nil for unparseable input.

@@ -11,7 +11,7 @@ struct ExerciseListView: View {
     @State private var exerciseToDelete: Exercise?
 
     private var filteredExercises: [Exercise] {
-        let trimmedSearch = searchText.trimmingCharacters(in: .whitespaces)
+        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let muscle = selectedMuscleGroup
         let equipment = selectedEquipmentType
         return exercises.filter { exercise in
@@ -72,6 +72,23 @@ struct ExerciseListView: View {
                 ForEach(sortedMuscleGroups) { muscleGroup in
                     muscleSection(for: muscleGroup)
                 }
+
+                if filteredExercises.isEmpty {
+                    Section {
+                        ContentUnavailableView(
+                            "Keine Übungen gefunden",
+                            systemImage: "magnifyingglass",
+                            description: Text("Passe den Suchbegriff oder die Filter an.")
+                        )
+                        if !searchText.isEmpty || selectedMuscleGroup != nil || selectedEquipmentType != nil {
+                            Button("Filter zurücksetzen") {
+                                searchText = ""
+                                selectedMuscleGroup = nil
+                                selectedEquipmentType = nil
+                            }
+                        }
+                    }
+                }
             }
             .navigationTitle("Übungen")
             .searchable(text: $searchText, prompt: "Übung suchen")
@@ -93,23 +110,18 @@ struct ExerciseListView: View {
                     get: { exerciseToDelete != nil },
                     set: { if !$0 { exerciseToDelete = nil } }
                 ),
-                titleVisibility: .visible
-            ) {
+                titleVisibility: .visible,
+                presenting: exerciseToDelete
+            ) { exercise in
                 Button("Übung löschen", role: .destructive) {
-                    if let exercise = exerciseToDelete {
-                        deleteExercise(exercise)
-                    }
+                    deleteExercise(exercise)
+                    exerciseToDelete = nil
                 }
                 Button("Abbrechen", role: .cancel) {
                     exerciseToDelete = nil
                 }
-            } message: {
-                Text("Die Übung wird gelöscht. Frühere Trainingseinträge bleiben erhalten und zeigen dann keine verknüpfte Übung mehr an.")
-            }
-            .overlay {
-                if filteredExercises.isEmpty && !searchText.isEmpty {
-                    ContentUnavailableView.search(text: searchText)
-                }
+            } message: { exercise in
+                Text("„\(exercise.name)“ wird gelöscht. Frühere Trainingseinträge bleiben erhalten und zeigen dann keine verknüpfte Übung mehr an.")
             }
         }
     }
@@ -157,7 +169,11 @@ private struct FilterChip: View {
                 .background(isSelected ? Color.blue : Color(.systemGray5))
                 .foregroundStyle(isSelected ? .white : .primary)
                 .clipShape(Capsule())
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.borderless)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

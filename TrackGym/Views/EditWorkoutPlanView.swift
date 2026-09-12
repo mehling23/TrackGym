@@ -18,7 +18,7 @@ struct EditWorkoutPlanView: View {
     }
 
     private var isValid: Bool {
-        !planName.trimmingCharacters(in: .whitespaces).isEmpty
+        !planName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -48,6 +48,7 @@ struct EditWorkoutPlanView: View {
                                     Image(systemName: "minus.circle.fill")
                                         .foregroundStyle(.red)
                                 }
+                                .buttonStyle(.borderless)
                                 .accessibilityLabel("\(exercise.name) entfernen")
                             }
                         }
@@ -101,7 +102,8 @@ struct EditWorkoutPlanView: View {
     }
 
     private func savePlan() {
-        let trimmedName = planName.trimmingCharacters(in: .whitespaces)
+        let trimmedName = planName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
         if let plan = existingPlan {
             plan.name = trimmedName
             plan.setExercises(selectedExercises)

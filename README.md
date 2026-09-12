@@ -23,7 +23,7 @@ Plan your strength training on the iPhone, log every set from the Apple Watch, a
 
 - **Training plans** from a catalogue of 77 exercises (German names) grouped by muscle group and equipment, plus your own custom exercises. Drag to set the order the exercises come up in.
 - **Live tracking**: start a plan, see last session's sets next to each exercise, pre-filled sets you only adjust, per-exercise notes ("safety pins on 14"), a training clock and a **rest timer** after every logged set.
-- **Progress**: weight and volume charts per exercise, personal-record badges, and volume per muscle group for the last week, month or year.
+- **Progress**: weight and volume charts per exercise, personal-record badges, and volume per muscle group for the last week, month or all time. Overall history remains available after an exercise is deleted.
 - **Backup**: export and import everything as JSON. Exercises carry stable UUIDs, so a backup restored on a new phone keeps every plan and history link intact.
 
 **Apple Watch — log without touching the phone**
@@ -54,7 +54,7 @@ TrackGymTests/, …AppTests/         # XCTest, in-memory SwiftData
 
 ## Tests & CI
 
-80 unit tests (66 iOS, 14 watchOS) plus a UI smoke test, all against in-memory SwiftData containers; GitHub Actions builds and tests both platforms on every push. Covered: backup round-trips (ids, order, notes, units, legacy files), duplicate detection, seeding, history lookups, statistics, watch payload parsing, dedup buffer, and the context-replay decision.
+105 unit tests (82 iOS, 23 watchOS) plus 8 UI tests; SwiftData tests use in-memory containers, and UI tests launch with an isolated in-memory store. GitHub Actions builds and tests both platforms on every push. Covered: backup round-trips (ids, order, notes, units, legacy files), import validation and orphan cleanup, duplicate detection, seeding, history lookups, statistics, watch payload parsing and delivery acknowledgements, context ordering, and HealthKit authorization cancellation. UI tests cover plan creation, set validation, partial saves, finishing and cancelling workouts, exercise deletion with preserved history, and filter reset.
 
 ```bash
 DEST=$(xcrun simctl list devices available \

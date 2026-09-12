@@ -195,4 +195,120 @@ final class TrackGym_Watch_App_Watch_AppTests: XCTestCase {
         // Older phone builds sent no sentAt; never lock those out.
         XCTAssertTrue(WatchConnectivityManager.shouldReplay(context: context(sentAt: nil), clearedStamp: 0, now: Date()))
     }
+
+    @MainActor
+    func testApplyState_ignoresOlderAndDuplicateMessagesAfterWorkoutEnded() throws {
+        try withIsolatedDefaults { defaults in
+            let manager = WatchConnectivityManager(defaults: defaults)
+            let stamp = Date().timeIntervalSince1970
+            manager.applyStateSynchronously(context(sentAt: stamp))
+            manager.applyStateSynchronously(["type": "workoutEnded", "sentAt": stamp + 2])
+            manager.applyStateSynchronously(context(sentAt: stamp + 1))
+            manager.applyStateSynchronously(context(sentAt: stamp + 2))
+
+            XCTAssertFalse(manager.workoutActive)
+            XCTAssertEqual(manager.exerciseName, "")
+
+            manager.applyStateSynchronously(context(sentAt: stamp + 3))
+            XCTAssertTrue(manager.workoutActive)
+        }
+    }
+
+    @MainActor
+    func testApplyState_doesNotResurrectLocallyDismissedContextAfterRelaunch() throws {
+        try withIsolatedDefaults { defaults in
+            let stamp = Date().timeIntervalSince1970
+            let manager = WatchConnectivityManager(defaults: defaults)
+            manager.applyStateSynchronously(context(sentAt: stamp))
+            manager.clearLocalState()
+
+            let relaunchedManager = WatchConnectivityManager(defaults: defaults)
+            relaunchedManager.applyStateSynchronously(context(sentAt: stamp))
+            relaunchedManager.applyStateSynchronously(context(sentAt: stamp - 1))
+            XCTAssertFalse(relaunchedManager.workoutActive)
+            relaunchedManager.applyStateSynchronously(context(sentAt: stamp + 1))
+            XCTAssertTrue(relaunchedManager.workoutActive)
+        }
+    }
+
+    @MainActor
+    func testApplyState_unknownMessageDoesNotAdvanceStateTimestamp() throws {
+        try withIsolatedDefaults { defaults in
+            let manager = WatchConnectivityManager(defaults: defaults)
+            let stamp = Date().timeIntervalSince1970
+            manager.applyStateSynchronously(["type": "unknown", "sentAt": stamp + 100])
+            manager.applyStateSynchronously(context(sentAt: stamp))
+            XCTAssertTrue(manager.workoutActive)
+        }
+    }
+
+    @MainActor
+    func testApplyState_skipsInvalidSetNumbersAndDuplicateIdentifiers() {
+        let manager = WatchConnectivityManager()
+        manager.applyStateSynchronously([
+            "type": "activeExercise",
+            "sets": [
+                ["setNumber": Double.greatestFiniteMagnitude, "weight": 80, "reps": 5],
+                ["setNumber": 1.5, "weight": 80, "reps": 5],
+                ["setNumber": true, "weight": 80, "reps": 5],
+                ["setNumber": 0, "weight": 80, "reps": 5],
+                ["setNumber": 1, "weight": Double.nan, "reps": 5],
+                ["setNumber": 1, "weight": -1, "reps": 5],
+                ["setNumber": 1, "weight": 80, "reps": 2.5],
+                ["setNumber": 1, "weight": 80, "reps": 5],
+                ["setNumber": 1, "weight": 90, "reps": 6],
+            ] as [[String: Any]],
+        ])
+        XCTAssertEqual(manager.sets, [WatchSet(setNumber: 1, weight: 80, reps: 5)])
+    }
+
+    @MainActor
+    func testApplyState_ignoresUnrepresentableRestTimers() {
+        let manager = WatchConnectivityManager()
+        for end in [Double.infinity, Double.nan, Double.greatestFiniteMagnitude] {
+            manager.applyStateSynchronously(["type": "activeExercise", "restEndsAt": end])
+            XCTAssertNil(manager.restEndDate)
+        }
+    }
+
+    func testShouldReplay_rejectsInvalidAndFarFutureTimestamps() {
+        let now = Date()
+        for stamp in [Double.infinity, Double.nan, 0, -1, now.timeIntervalSince1970 + 121] {
+            XCTAssertFalse(WatchConnectivityManager.shouldReplay(context: context(sentAt: stamp), clearedStamp: 0, now: now))
+        }
+        XCTAssertFalse(WatchConnectivityManager.shouldReplay(context: context(sentAt: now.timeIntervalSince1970 - 1), clearedStamp: now.timeIntervalSince1970, now: now))
+    }
+
+    func testWorkoutAuthorization_coalescesRepeatedStarts() throws {
+        var gate = WorkoutAuthorizationGate()
+        let request = try XCTUnwrap(gate.begin())
+        XCTAssertNil(gate.begin())
+        XCTAssertTrue(gate.complete(request))
+        XCTAssertFalse(gate.complete(request))
+        XCTAssertNotNil(gate.begin())
+    }
+
+    func testWorkoutAuthorization_endingWorkoutRejectsLateAuthorization() throws {
+        var gate = WorkoutAuthorizationGate()
+        let request = try XCTUnwrap(gate.begin())
+        gate.cancel()
+        XCTAssertFalse(gate.complete(request))
+    }
+
+    func testWorkoutAuthorization_oldCallbackCannotStartANewerWorkout() throws {
+        var gate = WorkoutAuthorizationGate()
+        let oldRequest = try XCTUnwrap(gate.begin())
+        gate.cancel()
+        let newRequest = try XCTUnwrap(gate.begin())
+        XCTAssertFalse(gate.complete(oldRequest))
+        XCTAssertTrue(gate.complete(newRequest))
+    }
+
+    @MainActor
+    private func withIsolatedDefaults(_ body: (UserDefaults) -> Void) throws {
+        let suite = "WatchConnectivityTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        body(defaults)
+    }
 }
