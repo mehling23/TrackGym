@@ -185,7 +185,23 @@ private struct WorkoutHistoryRow: View {
     }
 
     var sortedEntries: [WorkoutEntry] {
-        workout.entries.sorted { ($0.exercise?.name ?? "") < ($1.exercise?.name ?? "") }
+        if let plan = workout.plan {
+            let position = Dictionary(
+                plan.orderedExercises.enumerated().map { ($1.persistentModelID, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            return workout.entries.sorted { lhs, rhs in
+                let posL = lhs.exercise.flatMap { position[$0.persistentModelID] }
+                let posR = rhs.exercise.flatMap { position[$0.persistentModelID] }
+                switch (posL, posR) {
+                case let (l?, r?): return l < r
+                case (.some, .none): return true
+                case (.none, .some): return false
+                case (.none, .none): return (lhs.exercise?.name ?? "") < (rhs.exercise?.name ?? "")
+                }
+            }
+        }
+        return workout.entries.sorted { ($0.exercise?.name ?? "") < ($1.exercise?.name ?? "") }
     }
 
     var body: some View {

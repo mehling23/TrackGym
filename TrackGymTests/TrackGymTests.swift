@@ -54,6 +54,16 @@ final class TrackGymTests: XCTestCase {
 
         set.setWeight(110, unit: .lbs)
         XCTAssertEqual(set.weight, 49.895, accuracy: 0.001)
+
+        set.setWeight(-10, unit: .kg)
+        XCTAssertEqual(set.weight, 0)
+
+        set.setWeight(50, unit: .kg)
+        set.setWeight(Double.nan, unit: .kg)
+        XCTAssertEqual(set.weight, 50)
+
+        set.setWeight(Double.infinity, unit: .kg)
+        XCTAssertEqual(set.weight, 50)
     }
 
     func test_sortedSets_ordersBySetNumber() throws {

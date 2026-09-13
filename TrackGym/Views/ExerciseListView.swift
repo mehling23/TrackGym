@@ -129,6 +129,7 @@ struct ExerciseListView: View {
     private func deleteExercise(_ exercise: Exercise) {
         withAnimation {
             modelContext.delete(exercise)
+            try? modelContext.save()
         }
     }
 

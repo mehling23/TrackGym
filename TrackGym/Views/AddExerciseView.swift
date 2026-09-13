@@ -90,6 +90,7 @@ struct AddExerciseView: View {
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         exercise.notes = trimmedNotes.isEmpty ? nil : trimmedNotes
         modelContext.insert(exercise)
+        try? modelContext.save()
         dismiss()
     }
 }

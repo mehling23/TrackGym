@@ -312,20 +312,25 @@ struct SettingsView: View {
     private static func loadImportData(from url: URL) async throws -> Data {
         let maximumFileSize = maximumBackupImportFileSize
         return try await Task.detached(priority: .userInitiated) {
-            guard url.startAccessingSecurityScopedResource() else {
-                throw BackupImportError.fileAccessDenied
+            let isSecurityScoped = url.startAccessingSecurityScopedResource()
+            defer {
+                if isSecurityScoped {
+                    url.stopAccessingSecurityScopedResource()
+                }
             }
-            defer { url.stopAccessingSecurityScopedResource() }
 
-            let values = try url.resourceValues(forKeys: [.fileSizeKey])
-            guard let fileSize = values.fileSize else {
-                throw BackupImportError.fileSizeUnavailable
+            if let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+               let fileSize = values.fileSize {
+                guard fileSize <= maximumFileSize else {
+                    throw BackupImportError.fileTooLarge(maximumBytes: maximumFileSize)
+                }
             }
-            guard fileSize <= maximumFileSize else {
+
+            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+            guard data.count <= maximumFileSize else {
                 throw BackupImportError.fileTooLarge(maximumBytes: maximumFileSize)
             }
-
-            return try Data(contentsOf: url, options: [.mappedIfSafe])
+            return data
         }.value
     }
 
@@ -337,6 +342,7 @@ struct SettingsView: View {
             try deleteAll(WorkoutEntry.self)
             try deleteAll(Workout.self)
             try modelContext.save()
+            PhoneConnectivityManager.shared.sendWorkoutEnded()
             alertMessage = "Fortschritte gelöscht."
             showingAlert = true
         } catch {
@@ -360,6 +366,7 @@ struct SettingsView: View {
             // single step, since both live in the SwiftData store (MHE-24).
             DefaultExercises.seedDefaultExercises(context: modelContext)
             try modelContext.save()
+            PhoneConnectivityManager.shared.sendWorkoutEnded()
             alertMessage = "Alle Daten gelöscht."
             showingAlert = true
         } catch {

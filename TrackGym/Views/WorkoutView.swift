@@ -142,5 +142,6 @@ struct WorkoutView: View {
 
     private func deletePlan(_ plan: WorkoutPlan) {
         modelContext.delete(plan)
+        try? modelContext.save()
     }
 }

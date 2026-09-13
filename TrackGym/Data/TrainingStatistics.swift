@@ -11,8 +11,11 @@ enum TrainingStatistics {
             guard entry.workout != nil, let exercise = entry.exercise else { continue }
             if let since, entry.date < since { continue }
             let volume = entry.totalVolume
-            guard volume > 0 else { continue }
-            totals[exercise.muscleGroup, default: 0] += volume
+            guard volume > 0, volume.isFinite else { continue }
+            let current = totals[exercise.muscleGroup, default: 0]
+            let sum = current + volume
+            guard sum.isFinite else { continue }
+            totals[exercise.muscleGroup] = sum
         }
         return totals
             .map { (group: $0.key, volumeKg: $0.value) }

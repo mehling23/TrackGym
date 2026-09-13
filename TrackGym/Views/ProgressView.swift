@@ -202,6 +202,7 @@ private struct OverallProgressView: View {
                                 .foregroundStyle(.blue)
                             }
                         }
+                        .chartYScale(domain: muscleVolumeData.map(\.group.displayName).reversed())
                         .chartXAxisLabel(selectedUnit.rawValue)
                         .frame(height: CGFloat(muscleVolumeData.count) * 36 + 24)
                         .padding(.vertical, 4)

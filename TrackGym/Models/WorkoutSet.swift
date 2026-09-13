@@ -20,6 +20,7 @@ final class WorkoutSet {
     }
 
     func setWeight(_ displayValue: Double, unit: WeightUnit) {
-        weight = unit.kilograms(from: displayValue)
+        guard displayValue.isFinite else { return }
+        weight = max(0, unit.kilograms(from: displayValue))
     }
 }

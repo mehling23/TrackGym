@@ -28,6 +28,7 @@ struct ActiveWorkoutView: View {
     @State private var touchedEntryIDs: Set<ObjectIdentifier> = []
     @State private var watchPushTask: Task<Void, Never>?
     @State private var didSetUpWorkout = false
+    @State private var isDismissing = false
 
     @State private var startTime = Date()
 
@@ -313,12 +314,13 @@ struct ActiveWorkoutView: View {
         guard persistWorkoutChanges() else { return }
 
         withAnimation {
-            workoutEntries.removeAll { $0.persistentModelID == entry.persistentModelID }
+            workoutEntries.removeAll { $0 === entry }
         }
 
         if workoutEntries.isEmpty {
             // Saving the last remaining entry also ends the workout, so the
             // watch must be told to clear its active-exercise UI.
+            isDismissing = true
             endWatchWorkout()
             dismiss()
         } else {
@@ -327,6 +329,7 @@ struct ActiveWorkoutView: View {
     }
 
     private func finishAllAndEnd() {
+        guard !isDismissing else { return }
         let touched = entriesToSave
         guard validateEntries(touched) else { return }
         let seconds = elapsedSeconds(now: Date())
@@ -357,12 +360,14 @@ struct ActiveWorkoutView: View {
 
         guard persistWorkoutChanges() else { return }
 
+        isDismissing = true
         workoutEntries.removeAll()
         endWatchWorkout()
         dismiss()
     }
 
     private func cancelWorkout() {
+        guard !isDismissing else { return }
         // Delete only the pending in-memory entries that were never attached
         // to a workout. Entries the user explicitly saved with the checkmark
         // are already committed to disk — the cancel alert promises they stay.
@@ -384,6 +389,7 @@ struct ActiveWorkoutView: View {
             failureMessage: "Das abgebrochene Training konnte nicht vollständig verworfen werden. Bitte versuche es erneut."
         ) else { return }
 
+        isDismissing = true
         workoutEntries.removeAll()
         activeWorkout = nil
         endWatchWorkout()
@@ -564,7 +570,7 @@ private struct ActiveEntrySection: View {
         let sorted = entry.sortedSets
         for index in offsets {
             let set = sorted[index]
-            entry.sets.removeAll { $0.persistentModelID == set.persistentModelID }
+            entry.sets.removeAll { $0 === set }
             modelContext.delete(set)
         }
         onSetsChanged()
@@ -592,7 +598,8 @@ private struct ActiveSetRow: View {
         Binding(
             get: { set.weight(in: selectedUnit) },
             set: {
-                set.setWeight($0, unit: selectedUnit)
+                guard $0.isFinite else { return }
+                set.setWeight(max(0, $0), unit: selectedUnit)
                 onEdit()
             }
         )
@@ -600,7 +607,7 @@ private struct ActiveSetRow: View {
 
     private var displayReps: Binding<Int> {
         Binding(get: { set.reps }, set: {
-            set.reps = $0
+            set.reps = max(0, $0)
             onEdit()
         })
     }

@@ -3,7 +3,7 @@ import OSLog
 import SwiftData
 
 enum WorkoutHistory {
-    private static let log = Logger(subsystem: "com.trackgym.app", category: "WorkoutHistory")
+    private static let log = Logger(subsystem: "de.ehling.TrackGym", category: "WorkoutHistory")
 
     static func previousEntry(
         for exercise: Exercise?,

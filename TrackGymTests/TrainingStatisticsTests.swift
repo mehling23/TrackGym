@@ -72,6 +72,18 @@ final class TrainingStatisticsTests: XCTestCase {
         XCTAssertEqual(reversedResult.map(\.group), result.map(\.group))
     }
 
+    func test_volumeByMuscleGroup_ignoresNonFiniteVolume() throws {
+        makeCompletedEntry(muscleGroup: .chest, sets: [(Double.nan, 10)], daysAgo: 1)
+        makeCompletedEntry(muscleGroup: .chest, sets: [(Double.infinity, 10)], daysAgo: 1)
+        makeCompletedEntry(muscleGroup: .legs, sets: [(100, 10)], daysAgo: 1)
+
+        let result = TrainingStatistics.volumeByMuscleGroup(entries: allEntries(), since: nil)
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result.first?.group, .legs)
+        XCTAssertEqual(result.first?.volumeKg ?? 0, 1000, accuracy: 0.001)
+    }
+
     // MARK: - Helpers
 
     private func allEntries() -> [WorkoutEntry] {

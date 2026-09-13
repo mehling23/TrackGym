@@ -112,6 +112,7 @@ struct EditWorkoutPlanView: View {
             modelContext.insert(plan)
             plan.setExercises(selectedExercises)
         }
+        try? modelContext.save()
         dismiss()
     }
 }

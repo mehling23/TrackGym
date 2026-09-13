@@ -5,6 +5,12 @@ struct LogSetView: View {
     @Environment(WatchConnectivityManager.self) private var connectivity
     @Environment(\.dismiss) private var dismiss
 
+    private enum FocusField: Hashable {
+        case weight
+        case reps
+    }
+
+    @FocusState private var focusedField: FocusField?
     @State private var weight: Double = 0
     @State private var reps: Int = 1
 
@@ -16,26 +22,34 @@ struct LogSetView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 12) {
+            VStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Gewicht (\(connectivity.unit))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text("\(weight, specifier: "%.1f") \(connectivity.unit)")
                         .font(.title3.bold())
-                        .focusable()
-                        .digitalCrownRotation(
-                            $weight,
-                            from: 0,
-                            through: maxWeight,
-                            by: 0.5,
-                            sensitivity: .medium,
-                            isContinuous: false,
-                            isHapticFeedbackEnabled: true
-                        )
                 }
-
-                Divider()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(focusedField == .weight ? Color.blue.opacity(0.2) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(focusedField == .weight ? Color.blue : Color.clear, lineWidth: 1.5)
+                )
+                .contentShape(Rectangle())
+                .onTapGesture { focusedField = .weight }
+                .focusable()
+                .focused($focusedField, equals: .weight)
+                .digitalCrownRotation(
+                    $weight,
+                    from: 0,
+                    through: maxWeight,
+                    by: 0.5,
+                    sensitivity: .medium,
+                    isContinuous: false,
+                    isHapticFeedbackEnabled: true
+                )
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Wiederholungen")
@@ -43,22 +57,30 @@ struct LogSetView: View {
                         .foregroundStyle(.secondary)
                     Text("\(reps) Wdh")
                         .font(.title3.bold())
-                        .focusable()
-                        .digitalCrownRotation(
-                            Binding(
-                                get: { Double(reps) },
-                                set: { reps = max(1, Int($0.rounded())) }
-                            ),
-                            from: 1,
-                            through: 50,
-                            by: 1,
-                            sensitivity: .medium,
-                            isContinuous: false,
-                            isHapticFeedbackEnabled: true
-                        )
                 }
-
-                Divider()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(focusedField == .reps ? Color.blue.opacity(0.2) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(focusedField == .reps ? Color.blue : Color.clear, lineWidth: 1.5)
+                )
+                .contentShape(Rectangle())
+                .onTapGesture { focusedField = .reps }
+                .focusable()
+                .focused($focusedField, equals: .reps)
+                .digitalCrownRotation(
+                    Binding(
+                        get: { Double(reps) },
+                        set: { reps = max(1, Int($0.rounded())) }
+                    ),
+                    from: 1,
+                    through: 50,
+                    by: 1,
+                    sensitivity: .medium,
+                    isContinuous: false,
+                    isHapticFeedbackEnabled: true
+                )
 
                 Button {
                     saveSet()
@@ -72,6 +94,9 @@ struct LogSetView: View {
         }
         .navigationTitle("Satz loggen")
         .onAppear {
+            if focusedField == nil {
+                focusedField = .weight
+            }
             // Prefill from the most recent set so the user only fine-tunes.
             if weight == 0, let last = connectivity.sets.last {
                 weight = last.weight
